@@ -1,27 +1,30 @@
 from flask import Flask, request, abort
 import os
 import openai
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.v3.webhook import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import Configuration, MessagingApi, ReplyMessageRequest, TextMessage
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
-# 環境変数から読み込み（RenderのEnvironment Variablesで設定）
+# 環境変数から読み込み
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # ← OpenAIのキーもRenderに登録してね！
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# 初期化
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+# LINE Bot SDK v3 設定
+configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+messaging_api = MessagingApi(configuration)
+
+# OpenAI APIキー設定
 openai.api_key = OPENAI_API_KEY
 
 # Flaskアプリ作成
 app = Flask(__name__)
 
-# Webhookのエンドポイント
+# Webhookエンドポイント
 @app.route("/callback", methods=['POST'])
 def callback():
-    # 署名の取得と検証
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
 
@@ -30,33 +33,36 @@ def callback():
     except InvalidSignatureError:
         abort(400)
 
-    return 'OK'
+    return "OK"
 
-# LINEのメッセージ受信時の処理
-@handler.add(MessageEvent, message=TextMessage)
+# メッセージ受信時の処理
+@handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    user_message = event.message.text
+    user_text = event.message.text
 
-    # OpenAI ChatGPT APIへリクエスト
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",  # 必要に応じて gpt-4 に変更も可（課金必要）
+        ai_response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "あなたは親切な英会話教師です。"},
-                {"role": "user", "content": user_message}
+                {"role": "user", "content": user_text}
             ]
         )
-        reply = response.choices[0].message['content'].strip()
+        reply_text = ai_response.choices[0].message['content'].strip()
     except Exception as e:
-        reply = "ごめん、ちょっとエラーが出たみたい💦"
+        reply_text = "ごめん、ちょっとエラーが出たみたい💦"
 
     # LINEに返信
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply)
+    messaging_api.reply_message(
+        ReplyMessageRequest(
+            reply_token=event.reply_token,
+            messages=[TextMessage(text=reply_text)]
+        )
     )
 
-# Renderでの起動ポイント
+# Render対応：ホストとポートを明示
 if __name__ == "__main__":
-    app.run()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
 
